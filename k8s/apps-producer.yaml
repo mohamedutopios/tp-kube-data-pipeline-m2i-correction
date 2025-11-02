@@ -1,0 +1,16 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: producer, namespace: bank-pipeline }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: producer } }
+  template:
+    metadata: { labels: { app: producer } }
+    spec:
+      containers:
+      - name: producer
+        image: docker.io/mohamed1780/bank-producer:latest
+        env:
+        - { name: KAFKA_BROKERS, value: "redpanda:9092" }
+        - { name: KAFKA_TOPIC, value: "bank-transactions" }
+        - { name: RATE_PER_SEC, value: "5" }

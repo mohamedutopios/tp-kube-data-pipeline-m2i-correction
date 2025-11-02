@@ -1,0 +1,62 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: bank-pipeline
+spec:
+  ports:
+    - port: 5432
+  selector:
+    app: postgres
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: bank-pipeline
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      volumes:
+        - name: init
+          configMap:
+            name: init-sql
+            items:
+              - key: pg_tax_havens_init.sql
+                path: init.sql
+      containers:
+        - name: pg
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-secrets
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_DB
+              value: postgres
+          volumeMounts:
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["sh","-lc","pg_isready -U $POSTGRES_USER -d $POSTGRES_DB -h 127.0.0.1"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["sh","-lc","pg_isready -U $POSTGRES_USER -d $POSTGRES_DB -h 127.0.0.1"]
+            initialDelaySeconds: 15
+            periodSeconds: 10

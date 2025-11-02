@@ -1,0 +1,55 @@
+# spark-app (Deployment + Service)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-app
+  namespace: bank-pipeline
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spark-app
+  template:
+    metadata:
+      labels:
+        app: spark-app
+    spec:
+      containers:
+        - name: spark
+          image: docker.io/mohamed1780/bank-spark:v10
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: KAFKA_BROKERS, value: "redpanda:9092" }
+            - { name: KAFKA_TOPIC,   value: "bank-transactions" }
+            - { name: PG_HOST, value: "postgres" }
+            - { name: PG_DB,   value: "postgres" }
+            - { name: PG_USER, value: "postgres" }
+            - name: PG_PWD
+              valueFrom: { secretKeyRef: { name: db-secrets, key: POSTGRES_PASSWORD } }
+            - { name: MONGO_URI, value: "mongodb://root:root@mongodb:27017/?authSource=admin" }
+            - { name: MYSQL_URI, value: "mysql+pymysql://root:root@mysql:3306/alerts" }
+            - { name: MINIO_ENDPOINT, value: "minio:9000" }
+            - name: MINIO_ACCESS
+              valueFrom: { secretKeyRef: { name: db-secrets, key: MINIO_ROOT_USER } }
+            - name: MINIO_SECRET
+              valueFrom: { secretKeyRef: { name: db-secrets, key: MINIO_ROOT_PASSWORD } }
+          # Expose l'UI Spark (utile pour debug)
+          ports:
+            - name: ui
+              containerPort: 4040
+              protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spark-app
+  namespace: bank-pipeline
+spec:
+  selector:
+    app: spark-app
+  type: ClusterIP
+  ports:
+    - name: ui
+      port: 4040        # port interne (DNS: spark-app.bank-pipeline.svc.cluster.local:4040)
+      targetPort: 4040  # port du container
+      protocol: TCP

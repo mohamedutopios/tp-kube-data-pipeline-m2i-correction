@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: init-sql
+  namespace: bank-pipeline
+data:
+  pg_tax_havens_init.sql: |
+    CREATE TABLE IF NOT EXISTS tax_havens(
+      code TEXT PRIMARY KEY
+    );
+    INSERT INTO tax_havens(code) VALUES
+    ('VG'), -- Îles Vierges britanniques
+    ('KY'), -- Îles Caïmans
+    ('BM'), -- Bermudes
+    ('NL'), -- Pays-Bas
+    ('CH'), -- Suisse
+    ('LU'), -- Luxembourg
+    ('HK'), -- Hong-Kong
+    ('JE'), -- Jersey
+    ('SG'), -- Singapour
+    ('AE')  -- Émirats Arabes Unis
+    ON CONFLICT DO NOTHING;
+
+  mysql_alerts_init.sql: |
+    CREATE DATABASE IF NOT EXISTS alerts;
+    USE alerts;
+    CREATE TABLE IF NOT EXISTS suspicious_transactions(
+      id VARCHAR(36) PRIMARY KEY,
+      ts_utc TIMESTAMP,
+      datetime_norm VARCHAR(32),
+      creditor_name VARCHAR(128),
+      creditor_account VARCHAR(64),
+      creditor_country VARCHAR(8),
+      debtor_name VARCHAR(128),
+      debtor_account VARCHAR(64),
+      debtor_country VARCHAR(8),
+      amount_usd DECIMAL(18,2),
+      agent_first VARCHAR(64),
+      agent_last  VARCHAR(64)
+    );

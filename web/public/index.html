@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8"/>
+  <title>Alertes transactions</title>
+  <style>
+    body { font-family: ui-sans-serif, system-ui; margin: 24px; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ddd; padding: 8px; font-size: 14px; }
+    th { background: #f5f5f5; position: sticky; top: 0; }
+  </style>
+</head>
+<body>
+  <h2>Transactions suspectes (live)</h2>
+  <table id="t"><thead>
+    <tr>
+      <th>ts</th><th>datetime_norm</th><th>crediteur</th><th>cpt</th><th>pays</th>
+      <th>debiteur</th><th>montant $</th><th>agent</th>
+    </tr></thead><tbody></tbody></table>
+
+<script>
+const tbody = document.querySelector('#t tbody');
+function render(rows){
+  tbody.innerHTML = '';
+  rows.forEach(r => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${r.ts_utc ?? ''}</td>
+      <td>${r.datetime_norm ?? ''}</td>
+      <td>${r.creditor_name ?? ''}</td>
+      <td>${r.creditor_account ?? ''}</td>
+      <td>${r.creditor_country ?? ''}</td>
+      <td>${r.debtor_name ?? ''} (${r.debtor_country ?? ''})</td>
+      <td>${(typeof r.amount_usd === 'number') ? r.amount_usd.toFixed(2) : r.amount_usd}</td>
+      <td>${r.agent_first ?? ''} ${r.agent_last ?? ''}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+const es = new EventSource('/events');
+es.addEventListener('update', e => render(JSON.parse(e.data)));
+</script>
+</body>
+</html>

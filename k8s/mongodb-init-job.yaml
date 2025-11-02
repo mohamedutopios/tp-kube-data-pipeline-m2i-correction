@@ -1,0 +1,31 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mongodb-init
+  namespace: bank-pipeline
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: init
+        image: mongo:7
+        command:
+        - sh
+        - -c
+        - |
+          echo "Attente de MongoDB..."
+          sleep 15
+          mongosh mongodb://root:root@mongodb:27017/?authSource=admin --eval "
+            db = db.getSiblingDB('compliance');
+            db.agents.deleteMany({});
+            db.agents.insertMany([
+              { first: 'Alice', last: 'Durand' },
+              { first: 'Karim', last: 'Benali' },
+              { first: 'Nora',  last: 'Bensaid' },
+              { first: 'Yves',  last: 'Leroux' },
+              { first: 'Lila',  last: 'Ferri' }
+            ]);
+            print('✅ ' + db.agents.countDocuments() + ' agents insérés');
+          "
+          echo "Terminé"
