@@ -50,6 +50,8 @@ Le fichier [`config/kind-config.yaml`](./config/kind-config.yaml) définit la to
 > 🧱 Tous les composants (PostgreSQL, MongoDB, MinIO, Redpanda, Producer, Spark, Web) sont déployés via des **manifests Kubernetes** :
 > `Deployment`, `Service`, `ConfigMap`, `Secret`, etc.
 
+![Architecture Kubernetes ](./schema/tp-kubernetes.svg)
+
 ---
 
 ## 🖼️ **Résultats attendus**
