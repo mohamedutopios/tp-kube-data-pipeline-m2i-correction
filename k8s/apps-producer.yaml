@@ -9,7 +9,7 @@ spec:
     spec:
       containers:
       - name: producer
-        image: docker.io/mohamed1780/bank-producer:latest
+        image: docker.io/mohamed1780/producer-tp-m2i:latest
         env:
         - { name: KAFKA_BROKERS, value: "redpanda:9092" }
         - { name: KAFKA_TOPIC, value: "bank-transactions" }

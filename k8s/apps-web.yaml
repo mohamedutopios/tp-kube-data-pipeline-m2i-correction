@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
       - name: web
-        image: docker.io/mohamed1780/bank-web:latest
+        image: docker.io/mohamed1780/web-tp-m2i:latest
         env:
         - { name: MYSQL_HOST, value: "mysql" }
         - { name: MYSQL_USER, value: "root" }

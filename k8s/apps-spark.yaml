@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: spark
-          image: docker.io/mohamed1780/bank-spark:v10
+          image: docker.io/mohamed1780/spark-tp-m2i:latest
           imagePullPolicy: IfNotPresent
           env:
             - { name: KAFKA_BROKERS, value: "redpanda:9092" }
