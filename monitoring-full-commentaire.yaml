@@ -1,0 +1,500 @@
+###############################################################################
+# NAMESPACE : Isolation logique pour les composants de monitoring
+
+## Table of Contents
+
+###############################################################################
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring  # Namespace dédié pour Prometheus, Grafana et composants associés
+
+###############################################################################
+# PROMETHEUS - SERVICE ACCOUNT
+# Identité utilisée par Prometheus pour interroger l'API Kubernetes
+###############################################################################
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: monitoring
+
+###############################################################################
+# PROMETHEUS - CLUSTER ROLE
+# Définit les permissions nécessaires à Prometheus pour accéder aux ressources K8s
+###############################################################################
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus
+rules:
+# Accès en lecture aux nœuds et leurs métriques
+- apiGroups: [""]
+  resources: ["nodes", "nodes/proxy", "services", "endpoints", "pods"]
+  verbs: ["get", "list", "watch"]  # get: lecture unique, list: liste, watch: surveillance temps réel
+# Accès aux ingresses pour découvrir les routes
+- apiGroups: ["extensions", "networking.k8s.io"]
+  resources: ["ingresses"]
+  verbs: ["get", "list", "watch"]
+# Accès aux endpoints /metrics exposés par les composants K8s
+- nonResourceURLs: ["/metrics"]
+  verbs: ["get"]
+
+###############################################################################
+# PROMETHEUS - CLUSTER ROLE BINDING
+# Associe le ClusterRole au ServiceAccount prometheus
+###############################################################################
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus  # Référence au ClusterRole défini ci-dessus
+subjects:
+- kind: ServiceAccount
+  name: prometheus
+  namespace: monitoring  # Le ServiceAccount prometheus dans le namespace monitoring
+
+###############################################################################
+# KUBE-STATE-METRICS - SERVICE ACCOUNT
+# Identité pour kube-state-metrics qui expose les métriques des objets K8s
+###############################################################################
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-state-metrics
+  namespace: monitoring
+
+###############################################################################
+# KUBE-STATE-METRICS - CLUSTER ROLE
+# Permissions pour lire tous les objets K8s (pods, deployments, services, etc.)
+###############################################################################
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kube-state-metrics
+rules:
+# Accès en lecture aux ressources de base (core API group)
+- apiGroups: [""]
+  resources: 
+    - configmaps      # Configuration des applications
+    - secrets         # Secrets (tokens, passwords)
+    - nodes           # Nœuds du cluster
+    - pods            # Pods en cours d'exécution
+    - services        # Services exposant les pods
+    - resourcequotas  # Quotas de ressources
+    - replicationcontrollers  # Contrôleurs de réplication (ancien)
+    - limitranges     # Limites de ressources
+    - persistentvolumeclaims  # Demandes de volumes persistants
+    - persistentvolumes       # Volumes persistants
+    - namespaces      # Namespaces du cluster
+    - endpoints       # Endpoints des services
+  verbs: ["list", "watch"]  # list: lister, watch: surveiller les changements
+# Accès aux workloads (apps API group)
+- apiGroups: ["apps"]
+  resources: 
+    - statefulsets    # Applications avec état
+    - daemonsets      # Déploiement sur tous les nœuds
+    - deployments     # Déploiements standards
+    - replicasets     # Ensembles de réplicas
+  verbs: ["list", "watch"]
+# Accès aux jobs batch
+- apiGroups: ["batch"]
+  resources: 
+    - cronjobs        # Jobs planifiés
+    - jobs            # Jobs ponctuels
+  verbs: ["list", "watch"]
+# Accès à l'autoscaling
+- apiGroups: ["autoscaling"]
+  resources: 
+    - horizontalpodautoscalers  # HPA pour le scaling automatique
+  verbs: ["list", "watch"]
+
+###############################################################################
+# KUBE-STATE-METRICS - CLUSTER ROLE BINDING
+# Associe les permissions au ServiceAccount kube-state-metrics
+###############################################################################
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kube-state-metrics
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kube-state-metrics
+subjects:
+- kind: ServiceAccount
+  name: kube-state-metrics
+  namespace: monitoring
+
+###############################################################################
+# KUBE-STATE-METRICS - DEPLOYMENT
+# Déploie kube-state-metrics qui convertit l'état K8s en métriques Prometheus
+###############################################################################
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kube-state-metrics
+  namespace: monitoring
+spec:
+  replicas: 1  # Une seule instance suffit
+  selector:
+    matchLabels:
+      app: kube-state-metrics
+  template:
+    metadata:
+      labels:
+        app: kube-state-metrics  # Label pour identifier les pods
+    spec:
+      serviceAccountName: kube-state-metrics  # Utilise le ServiceAccount créé précédemment
+      containers:
+      - name: kube-state-metrics
+        image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.10.0  # Image officielle
+        ports:
+        - name: http-metrics
+          containerPort: 8080  # Port d'exposition des métriques au format Prometheus
+
+###############################################################################
+# KUBE-STATE-METRICS - SERVICE
+# Expose kube-state-metrics en interne pour que Prometheus puisse le scraper
+###############################################################################
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-state-metrics
+  namespace: monitoring
+spec:
+  ports:
+  - name: http-metrics
+    port: 8080          # Port du service
+    targetPort: 8080    # Port du container
+  selector:
+    app: kube-state-metrics  # Cible les pods avec ce label
+
+###############################################################################
+# NODE-EXPORTER - DAEMONSET
+# Déploie node-exporter sur TOUS les nœuds pour collecter les métriques hardware
+###############################################################################
+---
+apiVersion: apps/v1
+kind: DaemonSet  # DaemonSet = 1 pod par nœud automatiquement
+metadata:
+  name: node-exporter
+  namespace: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: node-exporter
+  template:
+    metadata:
+      labels:
+        app: node-exporter
+    spec:
+      hostNetwork: true  # Utilise le réseau de l'hôte (pas de network namespace isolé)
+      hostPID: true      # Accès aux processus de l'hôte
+      containers:
+      - name: node-exporter
+        image: prom/node-exporter:v1.7.0  # Exporter officiel Prometheus pour les métriques système
+        args:
+        - --path.procfs=/host/proc        # Chemin vers /proc de l'hôte
+        - --path.sysfs=/host/sys          # Chemin vers /sys de l'hôte
+        - --path.rootfs=/host/root        # Chemin vers / de l'hôte
+        - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)  # Exclut certains filesystems
+        ports:
+        - name: metrics
+          containerPort: 9100  # Port standard de node-exporter
+        volumeMounts:
+        # Monte les répertoires système de l'hôte en lecture seule
+        - name: proc
+          mountPath: /host/proc
+          readOnly: true
+        - name: sys
+          mountPath: /host/sys
+          readOnly: true
+        - name: root
+          mountPath: /host/root
+          readOnly: true
+      volumes:
+      # Volumes pointant vers les répertoires de l'hôte (hostPath)
+      - name: proc
+        hostPath:
+          path: /proc  # Informations sur les processus
+      - name: sys
+        hostPath:
+          path: /sys   # Informations système et hardware
+      - name: root
+        hostPath:
+          path: /      # Système de fichiers racine
+
+###############################################################################
+# NODE-EXPORTER - SERVICE
+# Expose node-exporter pour que Prometheus puisse le scraper
+###############################################################################
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: node-exporter
+  namespace: monitoring
+spec:
+  ports:
+  - name: metrics
+    port: 9100
+    targetPort: 9100
+  selector:
+    app: node-exporter
+
+###############################################################################
+# PROMETHEUS - CONFIGMAP
+# Configuration de Prometheus : quels targets scraper et à quelle fréquence
+###############################################################################
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: monitoring
+data:
+  prometheus.yml: |
+    # Configuration globale de Prometheus
+    global:
+      scrape_interval: 15s      # Collecte des métriques toutes les 15 secondes
+      evaluation_interval: 15s  # Évaluation des règles d'alerte toutes les 15 secondes
+    
+    # Liste des jobs de scraping (collecte de métriques)
+    scrape_configs:
+    
+    # Job 1 : Prometheus scrape ses propres métriques
+    - job_name: 'prometheus'
+      static_configs:
+      - targets: ['localhost:9090']  # Prometheus s'auto-monitore
+    
+    # Job 2 : Scraping de kube-state-metrics
+    # Collecte les métriques sur l'état des objets K8s (pods, deployments, etc.)
+    - job_name: 'kube-state-metrics'
+      static_configs:
+      - targets: ['kube-state-metrics.monitoring.svc.cluster.local:8080']  # DNS interne K8s
+    
+    # Job 3 : Scraping de node-exporter
+    # Collecte les métriques système des nœuds (CPU, RAM, disk, network)
+    - job_name: 'node-exporter'
+      kubernetes_sd_configs:  # Service Discovery Kubernetes
+      - role: endpoints       # Découvre automatiquement les endpoints
+        namespaces:
+          names:
+          - monitoring        # Uniquement dans le namespace monitoring
+      relabel_configs:        # Règles de re-labeling
+      - source_labels: [__meta_kubernetes_service_name]  # Filtre par nom de service
+        action: keep          # Garde uniquement les targets qui matchent
+        regex: node-exporter  # Regex : uniquement le service "node-exporter"
+    
+    # Job 4 : Scraping des pods avec annotation prometheus.io/scrape=true
+    # Permet aux applications d'exposer leurs métriques custom
+    - job_name: 'kubernetes-pods'
+      kubernetes_sd_configs:
+      - role: pod  # Découvre tous les pods du cluster
+      relabel_configs:
+      # Garde uniquement les pods avec l'annotation prometheus.io/scrape: "true"
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: true
+      # Utilise l'annotation prometheus.io/path pour définir le chemin des métriques
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+)
+      # Utilise l'annotation prometheus.io/port pour définir le port des métriques
+      - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        action: replace
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2      # Format : IP:PORT
+        target_label: __address__
+      # Copie tous les labels du pod vers les métriques
+      - action: labelmap
+        regex: __meta_kubernetes_pod_label_(.+)
+      # Ajoute le namespace comme label
+      - source_labels: [__meta_kubernetes_namespace]
+        action: replace
+        target_label: namespace
+      # Ajoute le nom du pod comme label
+      - source_labels: [__meta_kubernetes_pod_name]
+        action: replace
+        target_label: pod
+
+###############################################################################
+# PROMETHEUS - DEPLOYMENT
+# Déploie Prometheus qui collecte et stocke les métriques
+###############################################################################
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  replicas: 1  # Une seule instance de Prometheus
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      serviceAccountName: prometheus  # Utilise le ServiceAccount avec les permissions RBAC
+      containers:
+      - name: prometheus
+        image: prom/prometheus:v2.48.0  # Image officielle Prometheus
+        args:
+        - '--config.file=/etc/prometheus/prometheus.yml'  # Chemin du fichier de config
+        - '--storage.tsdb.path=/prometheus'               # Répertoire de stockage des données
+        - '--web.enable-lifecycle'                        # Active le reload de config via API
+        ports:
+        - containerPort: 9090  # Port de l'interface Web et de l'API
+        volumeMounts:
+        - name: config
+          mountPath: /etc/prometheus  # Monte la config depuis le ConfigMap
+        - name: storage
+          mountPath: /prometheus      # Monte le volume de stockage
+      volumes:
+      - name: config
+        configMap:
+          name: prometheus-config  # Référence au ConfigMap créé précédemment
+      - name: storage
+        emptyDir: {}  # Volume éphémère (données perdues si le pod redémarre)
+                      # En production, utiliser un PersistentVolume
+
+###############################################################################
+# PROMETHEUS - SERVICE
+# Expose Prometheus via NodePort pour accès depuis l'extérieur du cluster
+###############################################################################
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  type: NodePort  # Expose sur un port du nœud (accessible depuis l'extérieur)
+  selector:
+    app: prometheus  # Cible les pods Prometheus
+  ports:
+  - port: 9090          # Port du service (interne)
+    targetPort: 9090    # Port du container
+    nodePort: 30900     # Port exposé sur le nœud (30000-32767)
+
+###############################################################################
+# GRAFANA - DATASOURCE CONFIGMAP
+# Configure automatiquement Prometheus comme source de données dans Grafana
+###############################################################################
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasource
+  namespace: monitoring
+data:
+  datasource.yaml: |
+    apiVersion: 1
+    datasources:
+    - name: Prometheus                  # Nom de la datasource
+      type: prometheus                  # Type : Prometheus
+      access: proxy                     # Mode proxy : Grafana interroge Prometheus
+      url: http://prometheus.monitoring.svc.cluster.local:9090  # URL interne K8s
+      isDefault: true                   # Datasource par défaut
+      # editable: false peut être ajouté pour empêcher la modification via l'UI
+
+###############################################################################
+# GRAFANA - DEPLOYMENT
+# Déploie Grafana pour la visualisation des métriques
+###############################################################################
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  replicas: 1  # Une seule instance de Grafana
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+      - name: grafana
+        image: grafana/grafana:10.2.0  # Image officielle Grafana
+        ports:
+        - containerPort: 3000  # Port de l'interface Web
+        env:
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          value: "admin"  # Mot de passe admin par défaut
+                          # En production, utiliser un Secret K8s
+        volumeMounts:
+        - name: grafana-storage
+          mountPath: /var/lib/grafana  # Répertoire de stockage Grafana (dashboards, users, etc.)
+        - name: datasource
+          mountPath: /etc/grafana/provisioning/datasources  # Provisioning automatique de la datasource
+      volumes:
+      - name: grafana-storage
+        emptyDir: {}  # Volume éphémère
+                      # En production, utiliser un PersistentVolume pour conserver les dashboards
+      - name: datasource
+        configMap:
+          name: grafana-datasource  # Monte le ConfigMap avec la config Prometheus
+
+###############################################################################
+# GRAFANA - SERVICE
+# Expose Grafana via NodePort pour accès depuis l'extérieur du cluster
+###############################################################################
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  type: NodePort  # Expose sur un port du nœud
+  selector:
+    app: grafana  # Cible les pods Grafana
+  ports:
+  - port: 3000        # Port du service (interne)
+    targetPort: 3000  # Port du container
+    nodePort: 32000   # Port exposé sur le nœud
+
+###############################################################################
+# RÉSUMÉ DE L'ARCHITECTURE
+###############################################################################
+# 
+# 1. NODE-EXPORTER (DaemonSet)
+#    └─> Collecte les métriques système de chaque nœud (CPU, RAM, disk, network)
+#
+# 2. KUBE-STATE-METRICS (Deployment)
+#    └─> Expose l'état des objets K8s (pods, deployments, services, etc.)
+#
+# 3. PROMETHEUS (Deployment)
+#    ├─> Scrape node-exporter (métriques système)
+#    ├─> Scrape kube-state-metrics (état K8s)
+#    ├─> Scrape cAdvisor via kubelet (métriques containers)
+#    └─> Scrape les pods avec annotation prometheus.io/scrape=true
+#
+# 4. GRAFANA (Deployment)
+#    └─> Lit les métriques depuis Prometheus et les affiche dans des dashboards
+#
+# FLUX DES DONNÉES :
+# Nœuds/Pods → Exporters → Prometheus (collecte + stockage) → Grafana (visualisation)
+###############################################################################
