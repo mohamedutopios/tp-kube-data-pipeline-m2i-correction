@@ -1,18 +1,19 @@
 apiVersion: v1
 kind: Service
-metadata: { name: minio, namespace: bank-pipeline }
+metadata:
+  name: minio
+  namespace: bank-pipeline
 spec:
-  type: NodePort
+  type: LoadBalancer
   ports:
   - name: api
     port: 9000
     targetPort: 9000
-    nodePort: 31001
   - name: console
     port: 9001
     targetPort: 9001
-    nodePort: 31002
-  selector: { app: minio }
+  selector:
+    app: minio
 ---
 apiVersion: apps/v1
 kind: Deployment

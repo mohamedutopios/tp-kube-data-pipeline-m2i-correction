@@ -10,29 +10,36 @@ trigger:
       - k8s/*
 
 variables:
-  ACR_NAME: "myacr.azurecr.io"
+  ACR_NAME: "myacrmohamedaprr"
+  ACR_LOGIN: "$(ACR_NAME).azurecr.io"
   IMAGE_TAG: "$(Build.BuildId)"
-  K8S_NAMESPACE: "default"
+  K8S_NAMESPACE: "bank-pipeline"
 
+  # Azure DevOps Service Connection
+  AKS_CONNECTION: "connectionAzure"
+
+  # AKS Cluster
+  AKS_RG: "myRG"
+  AKS_NAME: "myAKS"
+
+# ==========================================================
+#                        CI
+# ==========================================================
 stages:
-# ==========================================================
-#                       CI – Detection + Build
-# ==========================================================
 - stage: CI
   displayName: "Build + Scan + Push images"
   jobs:
 
+  # ------------------------------------------------------
+  # DETECT CHANGES
+  # ------------------------------------------------------
   - job: detect_changes
     displayName: "Détecter les microservices modifiés"
-    outputs:
-      spark_changed: detect.changed_spark
-      prod_changed: detect.changed_producer
-      web_changed: detect.changed_web
+
     steps:
       - checkout: self
         persistCredentials: true
 
-      # Vérifier si chaque service a changé
       - bash: |
           echo "## Détection des changements"
 
@@ -40,112 +47,151 @@ stages:
           git diff --quiet HEAD~1 HEAD -- spark-app || echo "##vso[task.setvariable variable=changed_spark]true"
           git diff --quiet HEAD~1 HEAD -- web || echo "##vso[task.setvariable variable=changed_web]true"
 
-          # Valeur par défaut false pour éviter NULL
-          echo "Producer: $(changed_producer)"
-          echo "Spark:    $(changed_spark)"
-          echo "Web:      $(changed_web)"
-
+          echo "Producer changed: $(changed_producer)"
+          echo "Spark changed:    $(changed_spark)"
+          echo "Web changed:      $(changed_web)"
         name: detect
-        displayName: "Analyse des dossiers modifiés"
 
-  # --------------------------------------------------------------------
+  # ------------------------------------------------------
+  # LOGIN AZURE
+  # ------------------------------------------------------
+  - job: init_azure
+    displayName: "Login Azure"
+    dependsOn: detect_changes
+    pool:
+      vmImage: ubuntu-latest
+
+    steps:
+      - task: AzureCLI@2
+        displayName: "Login Azure SPN"
+        inputs:
+          azureSubscription: "$(AKS_CONNECTION)"
+          scriptType: bash
+          scriptLocation: inlineScript
+          inlineScript: |
+            echo "Connexion Azure OK"
+            az account show
+
+
+  # ======================================================
   # BUILD PRODUCER
-  # --------------------------------------------------------------------
+  # ======================================================
   - job: build_producer
     displayName: "Build Producer image"
-    dependsOn: detect_changes
-    condition: eq(dependencies.detect_changes.outputs['detect.changed_producer'], 'true')
+    dependsOn:
+      - detect_changes
+      - init_azure
+    condition: eq(variables['changed_producer'], 'true')
 
     steps:
       - checkout: self
 
-      - bash: |
-          docker build -t $(ACR_NAME)/producer:$(IMAGE_TAG) ./producer
-      displayName: "Docker build producer"
+      - task: AzureCLI@2
+        displayName: "Login ACR"
+        inputs:
+          azureSubscription: "$(AKS_CONNECTION)"
+          scriptType: bash
+          scriptLocation: inlineScript
+          inlineScript: |
+            az acr login --name $(ACR_NAME)
+
+      - bash: docker build -t $(ACR_LOGIN)/producer:$(IMAGE_TAG) ./producer
+        displayName: "Docker build producer"
+
+      - bash: trivy image --exit-code 1 --severity CRITICAL $(ACR_LOGIN)/producer:$(IMAGE_TAG)
+        displayName: "Scan Producer"
+
+      - bash: docker push $(ACR_LOGIN)/producer:$(IMAGE_TAG)
+        displayName: "Push Producer"
 
       - bash: |
-          trivy image --exit-code 1 --severity CRITICAL $(ACR_NAME)/producer:$(IMAGE_TAG)
-      displayName: "Scan Trivy Producer"
+          sed -i "s|image: .*producer:.*|image: $(ACR_LOGIN)/producer:$(IMAGE_TAG)|" k8s/apps-producer.yaml
+        displayName: "Update manifest producer"
 
-      - bash: |
-          az acr login --name $(ACR_NAME)
-          docker push $(ACR_NAME)/producer:$(IMAGE_TAG)
-      displayName: "Push image Producer"
-
-      # Mise à jour du manifest
-      - bash: |
-          sed -i "s|image: .*/producer:.*|image: $(ACR_NAME)/producer:$(IMAGE_TAG)|" k8s/apps-producer.yaml
-      displayName: "Maj manifest producer"
-
-      # Publier manifest mis à jour pour CD
       - publish: k8s/apps-producer.yaml
         artifact: producer-manifest
 
-  # --------------------------------------------------------------------
+
+  # ======================================================
   # BUILD SPARK
-  # --------------------------------------------------------------------
+  # ======================================================
   - job: build_spark
     displayName: "Build Spark image"
-    dependsOn: detect_changes
-    condition: eq(dependencies.detect_changes.outputs['detect.changed_spark'], 'true')
+    dependsOn:
+      - detect_changes
+      - init_azure
+    condition: eq(variables['changed_spark'], 'true')
 
     steps:
       - checkout: self
 
-      - bash: |
-          docker build -t $(ACR_NAME)/spark-app:$(IMAGE_TAG) ./spark-app
-      displayName: "Docker build spark"
+      - task: AzureCLI@2
+        displayName: "Login ACR"
+        inputs:
+          azureSubscription: "$(AKS_CONNECTION)"
+          scriptType: bash
+          scriptLocation: inlineScript
+          inlineScript: |
+            az acr login --name $(ACR_NAME)
+
+      - bash: docker build -t $(ACR_LOGIN)/spark-app:$(IMAGE_TAG) ./spark-app
+        displayName: "Docker build spark"
+
+      - bash: trivy image --exit-code 1 --severity CRITICAL $(ACR_LOGIN)/spark-app:$(IMAGE_TAG)
+        displayName: "Scan Spark"
+
+      - bash: docker push $(ACR_LOGIN)/spark-app:$(IMAGE_TAG)
+        displayName: "Push Spark"
 
       - bash: |
-          trivy image --exit-code 1 --severity CRITICAL $(ACR_NAME)/spark-app:$(IMAGE_TAG)
-      displayName: "Scan Spark image"
-
-      - bash: |
-          az acr login --name $(ACR_NAME)
-          docker push $(ACR_NAME)/spark-app:$(IMAGE_TAG)
-      displayName: "Push image Spark"
-
-      - bash: |
-          sed -i "s|image: .*/spark-app:.*|image: $(ACR_NAME)/spark-app:$(IMAGE_TAG)|" k8s/apps-spark.yaml
-      displayName: "Maj manifest spark"
+          sed -i "s|image: .*spark-app:.*|image: $(ACR_LOGIN)/spark-app:$(IMAGE_TAG)|" k8s/apps-spark.yaml
+        displayName: "Update manifest spark"
 
       - publish: k8s/apps-spark.yaml
         artifact: spark-manifest
 
-  # --------------------------------------------------------------------
+
+  # ======================================================
   # BUILD WEB
-  # --------------------------------------------------------------------
+  # ======================================================
   - job: build_web
     displayName: "Build Web image"
-    dependsOn: detect_changes
-    condition: eq(dependencies.detect_changes.outputs['detect.changed_web'], 'true')
+    dependsOn:
+      - detect_changes
+      - init_azure
+    condition: eq(variables['changed_web'], 'true')
 
     steps:
       - checkout: self
 
-      - bash: |
-          docker build -t $(ACR_NAME)/web:$(IMAGE_TAG) ./web
-      displayName: "Docker build web"
+      - task: AzureCLI@2
+        displayName: "Login ACR"
+        inputs:
+          azureSubscription: "$(AKS_CONNECTION)"
+          scriptType: bash
+          scriptLocation: inlineScript
+          inlineScript: |
+            az acr login --name $(ACR_NAME)
+
+      - bash: docker build -t $(ACR_LOGIN)/web:$(IMAGE_TAG) ./web
+        displayName: "Docker build web"
+
+      - bash: trivy image --exit-code 1 --severity CRITICAL $(ACR_LOGIN)/web:$(IMAGE_TAG)
+        displayName: "Scan Web"
+
+      - bash: docker push $(ACR_LOGIN)/web:$(IMAGE_TAG)
+        displayName: "Push Web"
 
       - bash: |
-          trivy image --exit-code 1 --severity CRITICAL $(ACR_NAME)/web:$(IMAGE_TAG)
-      displayName: "Scan Web image"
-
-      - bash: |
-          az acr login --name $(ACR_NAME)
-          docker push $(ACR_NAME)/web:$(IMAGE_TAG)
-      displayName: "Push image Web"
-
-      - bash: |
-          sed -i "s|image: .*/web:.*|image: $(ACR_NAME)/web:$(IMAGE_TAG)|" k8s/apps-web.yaml
-      displayName: "Maj manifest web"
+          sed -i "s|image: .*web:.*|image: $(ACR_LOGIN)/web:$(IMAGE_TAG)|" k8s/apps-web.yaml
+        displayName: "Update manifest web"
 
       - publish: k8s/apps-web.yaml
         artifact: web-manifest
 
 
 # ==========================================================
-#                        CD – Déploiement AKS
+#                        CD – DEPLOYMENT AKS
 # ==========================================================
 - stage: CD
   displayName: "Déploiement AKS"
@@ -155,48 +201,78 @@ stages:
     - deployment: deploy_k8s
       displayName: "Apply manifests mis à jour"
       environment: "aks-env"
+
       strategy:
         runOnce:
           deploy:
             steps:
 
-              # Auth AKS
+              # 🔥 IMPORTANT – pour que k8s/ soit présent
+              - checkout: self
+
+              # ---------------------------------------
+              # Connexion AKS
+              # ---------------------------------------
               - task: AzureCLI@2
                 displayName: "Connexion AKS"
                 inputs:
-                  azureSubscription: "aks-connection"
+                  azureSubscription: "$(AKS_CONNECTION)"
                   scriptType: bash
                   scriptLocation: inlineScript
                   inlineScript: |
                     az aks get-credentials \
-                      --resource-group myRG \
-                      --name myAKS \
+                      --resource-group $(AKS_RG) \
+                      --name $(AKS_NAME) \
                       --overwrite-existing
 
-              # Déploiement seulement des manifests mis à jour
+              # ---------------------------------------
+              # Télécharger les manifests modifiés
+              # ---------------------------------------
               - download: current
                 artifact: producer-manifest
-                condition: exists('$(Pipeline.Workspace)/producer-manifest/apps-producer.yaml')
+                condition: eq(variables['changed_producer'], 'true')
 
               - download: current
                 artifact: spark-manifest
-                condition: exists('$(Pipeline.Workspace)/spark-manifest/apps-spark.yaml')
+                condition: eq(variables['changed_spark'], 'true')
 
               - download: current
                 artifact: web-manifest
-                condition: exists('$(Pipeline.Workspace)/web-manifest/apps-web.yaml')
+                condition: eq(variables['changed_web'], 'true')
 
+              # ---------------------------------------
+              # DEPLOIEMENT INITIAL (corrigé)
+              # ---------------------------------------
               - bash: |
-                  echo "Déploiement Kubernetes…"
-                  for f in $(Pipeline.Workspace)/**/*.yaml; do
-                    echo "Applying $f"
-                    kubectl apply -f $f -n $(K8S_NAMESPACE)
-                  done
-              displayName: "Kubectl apply"
+                  echo "=== Checking if initial deploy is needed ==="
 
-              # Forcer un rollout intelligent (restart safe)
+                  if ! kubectl get ns $(K8S_NAMESPACE); then
+                    echo ">>> Creating namespace"
+                    kubectl apply -f k8s/namespace.yaml
+                    sleep 3
+                  fi
+
+                  if ! kubectl get deployment producer -n $(K8S_NAMESPACE); then
+                    echo ">>> Initial deployment: applying all manifests EXCEPT namespace"
+                    find k8s/ -type f ! -name "namespace.yaml" -exec kubectl apply -f {} \;
+                  else
+                    echo ">>> Initial deployment already done."
+                  fi
+                displayName: "Initial deploy if needed"
+
+              # ---------------------------------------
+              # Apply des manifests modifiés
+              # ---------------------------------------
+              - bash: |
+                  echo "=== Applying updated manifests ==="
+                  find $(Pipeline.Workspace) -name "*.yaml" -exec kubectl apply -n $(K8S_NAMESPACE) -f {} \;
+                displayName: "kubectl apply"
+
+              # ---------------------------------------
+              # Restart safe
+              # ---------------------------------------
               - bash: |
                   kubectl rollout restart deployment/producer -n $(K8S_NAMESPACE) || true
                   kubectl rollout restart deployment/spark-app -n $(K8S_NAMESPACE) || true
                   kubectl rollout restart deployment/web -n $(K8S_NAMESPACE) || true
-              displayName: "Rollout Restart"
+                displayName: "Restart deployments"
